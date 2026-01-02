@@ -20,8 +20,52 @@ export type TileKind =
 
 export type Cell = TileKind | null;
 
+const TILE_KINDS: readonly TileKind[] = [
+  "grass",
+  "bush",
+  "tree",
+  "hut",
+  "house",
+  "mansion",
+  "castle",
+  "rock",
+  "bear",
+  "gravestone",
+  "church",
+  "cathedral",
+  "crystal",
+] as const;
+
+function isTileKind(value: unknown): value is TileKind {
+  return typeof value === "string" && (TILE_KINDS as readonly string[]).includes(value);
+}
+
+export type GameSettingsV1 = {
+  version: 1;
+  spawnRocks: boolean;
+  spawnBears: boolean;
+  spawnCrystals: boolean;
+  /** If true, bears can move on the same turn they are placed. */
+  newBearsMoveImmediately: boolean;
+  /** Randomly seed the board with 0..initialRandomTilesMax tiles on new game. */
+  initialRandomTilesMax: number;
+};
+
+export const DEFAULT_SETTINGS: GameSettingsV1 = {
+  version: 1,
+  spawnRocks: true,
+  spawnBears: true,
+  spawnCrystals: true,
+  newBearsMoveImmediately: false,
+  initialRandomTilesMax: 5,
+};
+
+export type BearMove = { from: number; to: number };
+
 export type GameState = {
   grid: Cell[]; // length GRID_CELLS, row-major
+  bearCooldown: number[]; // length GRID_CELLS; >0 means bear is "new" and cannot move yet
+  settings: GameSettingsV1;
   score: number;
   turn: number;
   nextPiece: TileKind;
@@ -31,11 +75,12 @@ export type GameState = {
   lastTurn: {
     chainMerges: number;
     pointsEarned: number;
+    bearMoves: number;
   };
 };
 
 export type PlaceResult =
-  | { ok: true; state: GameState }
+  | { ok: true; state: GameState; bearMoves: BearMove[] }
   | { ok: false; reason: "occupied" | "out_of_bounds" | "game_over" };
 
 export type ReplayV1 = {
@@ -45,6 +90,28 @@ export type ReplayV1 = {
   seed: number;
   moves: Coord[]; // player placements, one per turn
 };
+
+export type ReplayV2 = {
+  version: 2;
+  createdAt: string;
+  gridSize: typeof GRID_SIZE;
+  seed: number;
+  settings: GameSettingsV1;
+  moves: Coord[]; // player placements, one per turn
+};
+
+export type ReplayMoveV3 = Coord & { piece: TileKind };
+
+export type ReplayV3 = {
+  version: 3;
+  createdAt: string;
+  gridSize: typeof GRID_SIZE;
+  seed: number;
+  settings: GameSettingsV1;
+  moves: ReplayMoveV3[];
+};
+
+export type Replay = ReplayV3 | ReplayV2 | ReplayV1;
 
 const NEXT_TIER: Partial<Record<TileKind, TileKind>> = {
   grass: "bush",
@@ -126,6 +193,33 @@ function listNeighbors(index: number): number[] {
   return out;
 }
 
+function isMergeableKind(kind: TileKind): boolean {
+  return kind in NEXT_TIER;
+}
+
+function wouldCreateImmediateMerge(grid: Cell[], idx: number, kind: TileKind): boolean {
+  if (!isMergeableKind(kind)) return false;
+  // Only checks the placed kind itself (initial seeding avoids crystals).
+  const seen = new Set<number>();
+  const q: number[] = [idx];
+  seen.add(idx);
+  let count = 0;
+  while (q.length) {
+    const cur = q.pop()!;
+    if (grid[cur] !== kind) continue;
+    count++;
+    if (count >= 3) return true;
+    for (const nb of listNeighbors(cur)) {
+      if (seen.has(nb)) continue;
+      if (grid[nb] === kind) {
+        seen.add(nb);
+        q.push(nb);
+      }
+    }
+  }
+  return false;
+}
+
 function countEmpty(grid: Cell[]): number {
   let n = 0;
   for (const c of grid) if (c === null) n++;
@@ -147,10 +241,14 @@ function pickWeighted(
   return { rngState: s2, kind: options[options.length - 1]!.kind };
 }
 
-function pieceWeights(score: number): { kind: TileKind; weight: number }[] {
+function pieceWeights(
+  score: number,
+  settings: GameSettingsV1,
+): { kind: TileKind; weight: number }[] {
   // Simple baseline distribution; can be tuned later.
-  if (score < 1000) {
-    return [
+  const base =
+    score < 1000
+      ? ([
       { kind: "grass", weight: 60 },
       { kind: "bush", weight: 15 },
       { kind: "tree", weight: 7 },
@@ -158,9 +256,8 @@ function pieceWeights(score: number): { kind: TileKind; weight: number }[] {
       { kind: "bear", weight: 5 },
       { kind: "gravestone", weight: 4 },
       { kind: "crystal", weight: 4 },
-    ];
-  }
-  return [
+        ] as const)
+      : ([
     { kind: "grass", weight: 50 },
     { kind: "bush", weight: 14 },
     { kind: "tree", weight: 8 },
@@ -168,22 +265,105 @@ function pieceWeights(score: number): { kind: TileKind; weight: number }[] {
     { kind: "bear", weight: 7 },
     { kind: "gravestone", weight: 5 },
     { kind: "crystal", weight: 4 },
-  ];
+        ] as const);
+
+  return base.filter((o) => {
+    if (o.kind === "rock" && !settings.spawnRocks) return false;
+    if (o.kind === "bear" && !settings.spawnBears) return false;
+    if (o.kind === "crystal" && !settings.spawnCrystals) return false;
+    return true;
+  });
 }
 
-export function createNewGame(seed: number): GameState {
+function pickNextPiece(rngState: number, score: number, settings: GameSettingsV1) {
+  const weights = pieceWeights(score, settings);
+  // Safety: if a config removes everything somehow, fall back to grass.
+  if (weights.length === 0) return { rngState, kind: "grass" as const };
+  return pickWeighted(rngState, weights);
+}
+
+function randomEmptyIndex(
+  grid: Cell[],
+  rngState: number,
+): { rngState: number; index: number | null } {
+  const empties: number[] = [];
+  for (let i = 0; i < grid.length; i++) if (grid[i] === null) empties.push(i);
+  if (empties.length === 0) return { rngState, index: null };
+  const step = rngNext(rngState);
+  const pick = Math.floor(step.value * empties.length);
+  const index = empties[Math.min(pick, empties.length - 1)]!;
+  return { rngState: step.rngState, index };
+}
+
+export function createNewGame(seed: number, settings?: Partial<GameSettingsV1>): GameState {
+  const resolvedSettings: GameSettingsV1 = {
+    ...DEFAULT_SETTINGS,
+    ...settings,
+    version: 1,
+  };
   const grid: Cell[] = Array.from({ length: GRID_CELLS }, () => null);
+  const bearCooldown: number[] = Array.from({ length: GRID_CELLS }, () => 0);
   const rngSeed = seed >>> 0;
-  const picked = pickWeighted(rngSeed, pieceWeights(0));
-  return {
+
+  let score = 0;
+  let rngState = rngSeed;
+
+  // Randomly seed the board with up to N tiles.
+  const maxSeedTiles = Math.max(0, Math.min(5, resolvedSettings.initialRandomTilesMax));
+  const seedCountStep = rngNext(rngState);
+  rngState = seedCountStep.rngState;
+  const seedCount = Math.floor(seedCountStep.value * (maxSeedTiles + 1));
+
+  // Initial seeding should *not* create merges.
+  const seedSettings: GameSettingsV1 = { ...resolvedSettings, spawnCrystals: false };
+  for (let k = 0; k < seedCount; k++) {
+    let placed = false;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const slot = randomEmptyIndex(grid, rngState);
+      rngState = slot.rngState;
+      if (slot.index === null) break;
+
+      const piece = pickNextPiece(rngState, score, seedSettings);
+      rngState = piece.rngState;
+
+      grid[slot.index] = piece.kind;
+      const bad = wouldCreateImmediateMerge(grid, slot.index, piece.kind);
+      if (bad) {
+        grid[slot.index] = null;
+        continue;
+      }
+
+      // Bears placed during initial seeding are allowed to move on the first turn.
+      if (piece.kind === "bear") bearCooldown[slot.index] = 0;
+      placed = true;
+      break;
+    }
+    if (!placed) break;
+  }
+
+  // Stabilize any accidental starting merges (no bear movement on game start).
+  let stabilized: GameState = {
     grid,
-    score: 0,
+    bearCooldown,
+    settings: resolvedSettings,
+    score,
     turn: 0,
-    nextPiece: picked.kind,
+    nextPiece: "grass",
     rngSeed,
-    rngState: picked.rngState,
+    rngState,
     gameOver: false,
-    lastTurn: { chainMerges: 0, pointsEarned: 0 },
+    lastTurn: { chainMerges: 0, pointsEarned: 0, bearMoves: 0 },
+  };
+  stabilized = resolveMerges(stabilized, null);
+  score = stabilized.score;
+
+  const picked = pickNextPiece(stabilized.rngState, score, resolvedSettings);
+  return {
+    ...stabilized,
+    score,
+    nextPiece: picked.kind,
+    rngState: picked.rngState,
+    gameOver: computeGameOver(stabilized.grid),
   };
 }
 
@@ -285,8 +465,10 @@ function applyMergePass(
 
     const chainIndex = state.lastTurn.chainMerges;
     const base = POINTS[upgradedKind] ?? 0;
-    const multiplier = 1 + chainIndex * 0.25;
-    const awarded = Math.round(base * multiplier);
+    const chainMultiplier = 1 + chainIndex * 0.25;
+    const extraTiles = Math.max(0, chosen.indices.length - 3);
+    const biggerMergeMultiplier = 1 + extraTiles * 0.1;
+    const awarded = Math.round(base * chainMultiplier * biggerMergeMultiplier);
 
     return {
       merged: true,
@@ -297,6 +479,7 @@ function applyMergePass(
         lastTurn: {
           chainMerges: chainIndex + 1,
           pointsEarned: state.lastTurn.pointsEarned + awarded,
+          bearMoves: state.lastTurn.bearMoves,
         },
       },
     };
@@ -316,16 +499,21 @@ function resolveMerges(state: GameState, preferredAnchor: number | null): GameSt
   return cur;
 }
 
-function moveBears(state: GameState): GameState {
+function moveBears(state: GameState): { state: GameState; bearMoves: BearMove[] } {
   const grid = state.grid.slice();
+  const bearCooldown = state.bearCooldown.slice();
   let rngState = state.rngState;
+  const moves: BearMove[] = [];
 
   for (let i = 0; i < grid.length; i++) {
     if (grid[i] !== "bear") continue;
 
+    if ((bearCooldown[i] ?? 0) > 0) continue;
+
     const emptyNeighbors = listNeighbors(i).filter((nb) => grid[nb] === null);
     if (emptyNeighbors.length === 0) {
       grid[i] = "gravestone";
+      bearCooldown[i] = 0;
       continue;
     }
 
@@ -336,9 +524,22 @@ function moveBears(state: GameState): GameState {
 
     grid[dest] = "bear";
     grid[i] = null;
+
+    // Moving bears are not considered "new".
+    bearCooldown[dest] = 0;
+    bearCooldown[i] = 0;
+    moves.push({ from: i, to: dest });
   }
 
-  return { ...state, grid, rngState };
+  // Decrement cooldowns after this turn's movement phase.
+  for (let i = 0; i < bearCooldown.length; i++) {
+    if (grid[i] === "bear" && bearCooldown[i] > 0) {
+      bearCooldown[i] = Math.max(0, bearCooldown[i] - 1);
+    }
+    if (grid[i] !== "bear") bearCooldown[i] = 0;
+  }
+
+  return { state: { ...state, grid, rngState, bearCooldown }, bearMoves: moves };
 }
 
 function computeGameOver(grid: Cell[]): boolean {
@@ -354,25 +555,37 @@ export function placeNextPiece(state: GameState, coord: Coord): PlaceResult {
   let nextState: GameState = {
     ...state,
     grid: state.grid.slice(),
-    lastTurn: { chainMerges: 0, pointsEarned: 0 },
+    bearCooldown: state.bearCooldown.slice(),
+    lastTurn: { chainMerges: 0, pointsEarned: 0, bearMoves: 0 },
   };
 
-  nextState.grid[idx] = state.nextPiece;
+  const placedPiece = state.nextPiece;
+  nextState.grid[idx] = placedPiece;
+  if (state.nextPiece === "bear" && !state.settings.newBearsMoveImmediately) {
+    nextState.bearCooldown[idx] = 1;
+  }
   nextState.turn = state.turn + 1;
 
   // Resolution phase: merges, then bears move, then merges again.
   nextState = resolveMerges(nextState, idx);
-  nextState = moveBears(nextState);
+  const moved = moveBears(nextState);
+  nextState = moved.state;
   nextState = resolveMerges(nextState, idx);
 
+  // Crystal rule: if a newly placed crystal wasn't used in a merge, it becomes a rock.
+  if (placedPiece === "crystal" && nextState.grid[idx] === "crystal") {
+    nextState.grid[idx] = "rock";
+  }
+
   // Generate next piece.
-  const picked = pickWeighted(nextState.rngState, pieceWeights(nextState.score));
+  const picked = pickNextPiece(nextState.rngState, nextState.score, nextState.settings);
   nextState.nextPiece = picked.kind;
   nextState.rngState = picked.rngState;
 
   nextState.gameOver = computeGameOver(nextState.grid);
+  nextState.lastTurn.bearMoves = moved.bearMoves.length;
 
-  return { ok: true, state: nextState };
+  return { ok: true, state: nextState, bearMoves: moved.bearMoves };
 }
 
 export function renderTileShort(kind: TileKind): string {
@@ -422,6 +635,53 @@ export function isReplayV1(value: unknown): value is ReplayV1 {
     const mm = m as Partial<Coord>;
     if (typeof mm.x !== "number" || typeof mm.y !== "number") return false;
     if (!inBounds({ x: mm.x, y: mm.y })) return false;
+  }
+  return true;
+}
+
+export function isGameSettingsV1(value: unknown): value is GameSettingsV1 {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Partial<GameSettingsV1>;
+  if (v.version !== 1) return false;
+  if (typeof v.spawnRocks !== "boolean") return false;
+  if (typeof v.spawnBears !== "boolean") return false;
+  if (typeof v.spawnCrystals !== "boolean") return false;
+  if (typeof v.newBearsMoveImmediately !== "boolean") return false;
+  if (typeof v.initialRandomTilesMax !== "number") return false;
+  return true;
+}
+
+export function isReplayV2(value: unknown): value is ReplayV2 {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Partial<ReplayV2>;
+  if (v.version !== 2) return false;
+  if (v.gridSize !== GRID_SIZE) return false;
+  if (typeof v.seed !== "number") return false;
+  if (!isGameSettingsV1(v.settings)) return false;
+  if (!Array.isArray(v.moves)) return false;
+  for (const m of v.moves) {
+    if (!m || typeof m !== "object") return false;
+    const mm = m as Partial<Coord>;
+    if (typeof mm.x !== "number" || typeof mm.y !== "number") return false;
+    if (!inBounds({ x: mm.x, y: mm.y })) return false;
+  }
+  return true;
+}
+
+export function isReplayV3(value: unknown): value is ReplayV3 {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Partial<ReplayV3>;
+  if (v.version !== 3) return false;
+  if (v.gridSize !== GRID_SIZE) return false;
+  if (typeof v.seed !== "number") return false;
+  if (!isGameSettingsV1(v.settings)) return false;
+  if (!Array.isArray(v.moves)) return false;
+  for (const m of v.moves) {
+    if (!m || typeof m !== "object") return false;
+    const mm = m as Partial<ReplayMoveV3>;
+    if (typeof mm.x !== "number" || typeof mm.y !== "number") return false;
+    if (!inBounds({ x: mm.x, y: mm.y })) return false;
+    if (!isTileKind(mm.piece)) return false;
   }
   return true;
 }

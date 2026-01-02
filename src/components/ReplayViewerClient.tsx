@@ -1,22 +1,73 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   createNewGame,
   isReplayV1,
+  isReplayV2,
+  isReplayV3,
   placeNextPiece,
   tileDisplayName,
+  type Replay,
   type GameState,
-  type ReplayV1,
+  type ReplayV2,
+  type ReplayV3,
 } from "@/lib/gameEngine";
-import { parseReplayJson } from "@/lib/storage";
+import { consumeReplayToOpen, parseReplayJson } from "@/lib/storage";
 import { GameBoard } from "./GameBoard";
 import { TileView } from "./TileView";
 
-function computeStateAt(replay: ReplayV1, step: number): GameState {
-  let state = createNewGame(replay.seed);
+function toReplayV2(replay: Replay): ReplayV2 {
+  if (replay.version === 2) return replay;
+  if (replay.version === 3) {
+    return {
+      version: 2,
+      createdAt: replay.createdAt,
+      gridSize: replay.gridSize,
+      seed: replay.seed,
+      settings: replay.settings,
+      moves: replay.moves.map((m) => ({ x: m.x, y: m.y })),
+    };
+  }
+  return {
+    version: 2,
+    createdAt: replay.createdAt,
+    gridSize: replay.gridSize,
+    seed: replay.seed,
+    settings: {
+      version: 1,
+      spawnRocks: true,
+      spawnBears: true,
+      spawnCrystals: true,
+      // Legacy behavior: bears moved on the same turn they were placed.
+      newBearsMoveImmediately: true,
+      // Legacy behavior: games started with an empty grid.
+      initialRandomTilesMax: 0,
+    },
+    moves: replay.moves,
+  };
+}
+
+function computeStateAt(replayAny: Replay, step: number): GameState {
+  // For deterministic playback, v3 replays force the placed piece each turn.
+  if (replayAny.version === 3) {
+    const replay = replayAny as ReplayV3;
+    let state = createNewGame(replay.seed, replay.settings);
+    const clamped = Math.max(0, Math.min(step, replay.moves.length));
+    for (let i = 0; i < clamped; i++) {
+      const move = replay.moves[i]!;
+      state = { ...state, nextPiece: move.piece };
+      const res = placeNextPiece(state, { x: move.x, y: move.y });
+      if (!res.ok) break;
+      state = res.state;
+    }
+    return state;
+  }
+
+  const replay = toReplayV2(replayAny);
+  let state = createNewGame(replay.seed, replay.settings);
   const clamped = Math.max(0, Math.min(step, replay.moves.length));
   for (let i = 0; i < clamped; i++) {
     const res = placeNextPiece(state, replay.moves[i]!);
@@ -28,9 +79,18 @@ function computeStateAt(replay: ReplayV1, step: number): GameState {
 
 export function ReplayViewerClient(): ReactNode {
   const [text, setText] = useState<string>("");
-  const [replay, setReplay] = useState<ReplayV1 | null>(null);
+  const [replay, setReplay] = useState<Replay | null>(null);
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const pending = consumeReplayToOpen();
+    if (!pending) return;
+    setReplay(pending);
+    setText(JSON.stringify(pending, null, 2));
+    setStep(0);
+    setError(null);
+  }, []);
 
   const state = useMemo(() => {
     if (!replay) return null;
@@ -69,13 +129,15 @@ export function ReplayViewerClient(): ReactNode {
             onClick={() => {
               setError(null);
               const parsed = parseReplayJson(text);
-              if (!parsed || !isReplayV1(parsed)) {
+              if (!parsed || (!isReplayV3(parsed) && !isReplayV2(parsed) && !isReplayV1(parsed))) {
                 setReplay(null);
                 setStep(0);
-                setError("Invalid replay JSON (expected version:1, gridSize:6, seed:number, moves:[{x,y}]).");
+                setError(
+                  "Invalid replay JSON (expected version:3, or older version:2/version:1).",
+                );
                 return;
               }
-              setReplay(parsed);
+              setReplay(parsed as Replay);
               setStep(0);
             }}
           >
@@ -127,6 +189,21 @@ export function ReplayViewerClient(): ReactNode {
                   <div className="text-sm font-semibold">{tileDisplayName(state.nextPiece)}</div>
                 </div>
               </div>
+
+              {replay.version === 2 || replay.version === 3 ? (
+                <div className="mt-4 rounded-lg bg-zinc-50 p-3 text-xs text-zinc-700">
+                  <div className="font-semibold">Settings</div>
+                  <div className="mt-1 space-y-1">
+                    <div>Spawn rocks: {String(replay.settings.spawnRocks)}</div>
+                    <div>Spawn bears: {String(replay.settings.spawnBears)}</div>
+                    <div>Spawn crystals: {String(replay.settings.spawnCrystals)}</div>
+                    <div>
+                      New bears move immediately: {String(replay.settings.newBearsMoveImmediately)}
+                    </div>
+                    <div>Initial random tiles max: {replay.settings.initialRandomTilesMax}</div>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-xl border bg-white p-4">
@@ -167,6 +244,9 @@ export function ReplayViewerClient(): ReactNode {
               {step > 0 ? (
                 <p className="mt-3 text-sm text-zinc-600">
                   Last move: ({replay.moves[step - 1]!.x}, {replay.moves[step - 1]!.y})
+                  {replay.version === 3 ? (
+                    <span className="ml-2">[{replay.moves[step - 1]!.piece}]</span>
+                  ) : null}
                 </p>
               ) : (
                 <p className="mt-3 text-sm text-zinc-600">Step 0 is the initial state.</p>

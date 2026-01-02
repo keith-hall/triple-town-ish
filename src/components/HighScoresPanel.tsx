@@ -1,11 +1,23 @@
 "use client";
 
-import { clearHighScores, loadHighScores } from "@/lib/storage";
-import { useState } from "react";
+import { clearHighScores, loadHighScores, setReplayToOpen } from "@/lib/storage";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 export function HighScoresPanel(): ReactNode {
   const [scores, setScores] = useState(() => loadHighScores());
+
+  useEffect(() => {
+    function refresh() {
+      setScores(loadHighScores());
+    }
+    window.addEventListener("storage", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.removeEventListener("storage", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
 
   return (
     <section className="rounded-xl border bg-white p-4">
@@ -27,9 +39,14 @@ export function HighScoresPanel(): ReactNode {
       ) : (
         <ol className="mt-3 space-y-2">
           {scores.slice(0, 10).map((s, i) => (
-            <li
+            <button
               key={`${s.finishedAt}-${s.score}-${i}`}
-              className="flex items-baseline justify-between gap-3 rounded-md bg-zinc-50 px-3 py-2"
+              type="button"
+              className="flex w-full items-baseline justify-between gap-3 rounded-md bg-zinc-50 px-3 py-2 text-left hover:bg-zinc-100"
+              onClick={() => {
+                setReplayToOpen(s.replay);
+                window.location.href = "/replay";
+              }}
             >
               <div className="text-sm">
                 <span className="font-semibold">#{i + 1}</span>
@@ -39,7 +56,7 @@ export function HighScoresPanel(): ReactNode {
               <div className="text-xs text-zinc-500">
                 {new Date(s.finishedAt).toISOString().slice(0, 10)}
               </div>
-            </li>
+            </button>
           ))}
         </ol>
       )}

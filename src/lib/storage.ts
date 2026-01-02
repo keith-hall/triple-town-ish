@@ -1,16 +1,20 @@
-import type { ReplayV1 } from "./gameEngine";
+import type { GameSettingsV1, ReplayV3 } from "./gameEngine";
 
-export type HighScoreEntryV1 = {
-  version: 1;
+export type HighScoreEntryV3 = {
+  version: 3;
   score: number;
   finishedAt: string;
   seed: number;
   moves: number;
+  replay: ReplayV3;
 };
 
-const HIGH_SCORES_KEY = "tripleTownHighScoresV1";
+const HIGH_SCORES_KEY = "tripleTownHighScoresV3";
+const SETTINGS_KEY = "tripleTownSettingsV1";
+const ANIM_MS_KEY = "tripleTownAnimMsV1";
+const REPLAY_TO_OPEN_KEY = "tripleTownReplayToOpenV3";
 
-export function loadHighScores(): HighScoreEntryV1[] {
+export function loadHighScores(): HighScoreEntryV3[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = window.localStorage.getItem(HIGH_SCORES_KEY);
@@ -19,14 +23,15 @@ export function loadHighScores(): HighScoreEntryV1[] {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
-        (e): e is HighScoreEntryV1 =>
+        (e): e is HighScoreEntryV3 =>
           !!e &&
           typeof e === "object" &&
-          (e as HighScoreEntryV1).version === 1 &&
-          typeof (e as HighScoreEntryV1).score === "number" &&
-          typeof (e as HighScoreEntryV1).finishedAt === "string" &&
-          typeof (e as HighScoreEntryV1).seed === "number" &&
-          typeof (e as HighScoreEntryV1).moves === "number",
+          (e as HighScoreEntryV3).version === 3 &&
+          typeof (e as HighScoreEntryV3).score === "number" &&
+          typeof (e as HighScoreEntryV3).finishedAt === "string" &&
+          typeof (e as HighScoreEntryV3).seed === "number" &&
+          typeof (e as HighScoreEntryV3).moves === "number" &&
+          typeof (e as HighScoreEntryV3).replay === "object",
       )
       .sort((a, b) => b.score - a.score)
       .slice(0, 25);
@@ -35,10 +40,10 @@ export function loadHighScores(): HighScoreEntryV1[] {
   }
 }
 
-export function saveHighScore(entry: Omit<HighScoreEntryV1, "version">): void {
+export function saveHighScore(entry: Omit<HighScoreEntryV3, "version">): void {
   if (typeof window === "undefined") return;
-  const next: HighScoreEntryV1[] = [
-    { version: 1 as const, ...entry },
+  const next: HighScoreEntryV3[] = [
+    { version: 3 as const, ...entry },
     ...loadHighScores(),
   ]
     .sort((a, b) => b.score - a.score)
@@ -49,6 +54,53 @@ export function saveHighScore(entry: Omit<HighScoreEntryV1, "version">): void {
 export function clearHighScores(): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(HIGH_SCORES_KEY);
+}
+
+export function loadSettings(): GameSettingsV1 | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as GameSettingsV1;
+  } catch {
+    return null;
+  }
+}
+
+export function saveSettings(settings: GameSettingsV1): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+export function loadAnimationMs(): number {
+  if (typeof window === "undefined") return 100;
+  const raw = window.localStorage.getItem(ANIM_MS_KEY);
+  const n = raw ? Number(raw) : 100;
+  if (!Number.isFinite(n)) return 100;
+  return Math.max(0, Math.min(200, Math.round(n)));
+}
+
+export function saveAnimationMs(ms: number): void {
+  if (typeof window === "undefined") return;
+  const clamped = Math.max(0, Math.min(200, Math.round(ms)));
+  window.localStorage.setItem(ANIM_MS_KEY, String(clamped));
+}
+
+export function setReplayToOpen(replay: ReplayV3): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(REPLAY_TO_OPEN_KEY, JSON.stringify(replay));
+}
+
+export function consumeReplayToOpen(): ReplayV3 | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(REPLAY_TO_OPEN_KEY);
+    if (!raw) return null;
+    window.localStorage.removeItem(REPLAY_TO_OPEN_KEY);
+    return JSON.parse(raw) as ReplayV3;
+  } catch {
+    return null;
+  }
 }
 
 export function downloadJson(filename: string, value: unknown): void {
@@ -71,15 +123,28 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    return false;
+    // Fallback for environments where clipboard API is blocked.
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      ta.style.top = "-9999px";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
   }
 }
 
-export function parseReplayJson(text: string): ReplayV1 | null {
+export function parseReplayJson(text: string): unknown {
   try {
-    const parsed = JSON.parse(text) as unknown;
-    // Validation happens in the engine (caller should use isReplayV1)
-    return parsed as ReplayV1;
+    return JSON.parse(text) as unknown;
   } catch {
     return null;
   }
