@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Next.js Template",
-  description: "A minimal Next.js starter template",
+  title: "Triple Town-ish",
+  description: "A deterministic, replayable merge puzzle on a 6×6 grid.",
 };
 
 export default function RootLayout({
