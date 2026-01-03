@@ -11,11 +11,13 @@ import {
   isReplayV2,
   isReplayV3,
   placeNextPiece,
+  previewImmediateMerge,
   tileDisplayName,
   type BearMove,
   type Coord,
   type GameSettingsV1,
   type GameState,
+  type TileKind,
   type Replay,
   type ReplayMoveV3,
   type ReplayV3,
@@ -29,7 +31,7 @@ import {
   saveHighScore,
   saveSettings,
 } from "@/lib/storage";
-import { GameBoard } from "./GameBoard";
+import { GameBoard, type OverlayMove } from "./GameBoard";
 import { TileView } from "./TileView";
 
 export function GameClient(): ReactNode {
@@ -44,10 +46,10 @@ export function GameClient(): ReactNode {
   const [moves, setMoves] = useState<ReplayMoveV3[]>([]);
   const [copied, setCopied] = useState(false);
   const [createdAt, setCreatedAt] = useState(() => new Date().toISOString());
-  const [bearMoves, setBearMoves] = useState<BearMove[]>([]);
-  const [dimmedBearDestinations, setDimmedBearDestinations] = useState<Set<number>>(
-    () => new Set(),
-  );
+  const [animMoves, setAnimMoves] = useState<OverlayMove[]>([]);
+  const [animQueue, setAnimQueue] = useState<OverlayMove[][]>([]);
+  const [dimmedDestinations, setDimmedDestinations] = useState<Set<number>>(() => new Set());
+  const [pulseIndices, setPulseIndices] = useState<Set<number>>(() => new Set());
 
   const replay: Replay = useMemo(() => {
     const replayV3: ReplayV3 = {
@@ -87,15 +89,17 @@ export function GameClient(): ReactNode {
     setState(createNewGame(nextSeed, settingsDraft));
     setMoves([]);
     setCreatedAt(new Date().toISOString());
-    setBearMoves([]);
-    setDimmedBearDestinations(new Set());
+    setAnimMoves([]);
+    setAnimQueue([]);
+    setDimmedDestinations(new Set());
   }
 
   function onCellClick(coord: Coord): void {
     // If the user clicks while bear animation is running, immediately end the animation.
-    if (bearMoves.length > 0) {
-      setBearMoves([]);
-      setDimmedBearDestinations(new Set());
+    if (animMoves.length > 0 || animQueue.length > 0) {
+      setAnimMoves([]);
+      setAnimQueue([]);
+      setDimmedDestinations(new Set());
     }
     const piece = state.nextPiece;
     const res = placeNextPiece(state, coord);
@@ -103,9 +107,28 @@ export function GameClient(): ReactNode {
     setState(res.state);
     setMoves((m) => [...m, { ...coord, piece }]);
 
-    if (res.bearMoves.length > 0 && animMs > 0) {
-      setBearMoves(res.bearMoves);
-      setDimmedBearDestinations(new Set(res.bearMoves.map((m) => m.to)));
+    if (animMs > 0) {
+      const steps: OverlayMove[][] = [];
+
+      // Merge animations (one step per merge event)
+      for (const ev of res.mergeEvents) {
+        const mergeMoves: OverlayMove[] = ev.consumed
+          .filter((t) => t.index !== ev.to)
+          .map((t) => ({ from: t.index, to: ev.to, kind: t.kind as TileKind }));
+        if (mergeMoves.length > 0) steps.push(mergeMoves);
+      }
+
+      // Bear movement animation
+      if (res.bearMoves.length > 0) {
+        steps.push(res.bearMoves.map((m: BearMove) => ({ ...m, kind: "bear" as const })));
+      }
+
+      if (steps.length > 0) {
+        setAnimMoves(steps[0]!);
+        setAnimQueue(steps.slice(1));
+        const shouldDim = steps[0]!.some((m) => m.kind === "bear");
+        setDimmedDestinations(shouldDim ? new Set(steps[0]!.map((m) => m.to)) : new Set());
+      }
     }
   }
 
@@ -149,18 +172,37 @@ export function GameClient(): ReactNode {
             grid={state.grid}
             onCellClick={onCellClick}
             disabled={state.gameOver}
-            dimmedIndices={dimmedBearDestinations}
-            bearMoves={bearMoves}
-            bearAnimMs={animMs}
-            onBearAnimDone={() => {
-              setBearMoves([]);
-              setDimmedBearDestinations(new Set());
+            rockCracks={state.rockCracks}
+            dimmedIndices={dimmedDestinations}
+            animMoves={animMoves}
+            animMs={animMs}
+            onAnimDone={() => {
+              if (animQueue.length === 0) {
+                setAnimMoves([]);
+                setDimmedDestinations(new Set());
+                return;
+              }
+              const [next, ...rest] = animQueue;
+              setAnimMoves(next!);
+              setAnimQueue(rest);
+              const shouldDim = next!.some((m) => m.kind === "bear");
+              setDimmedDestinations(shouldDim ? new Set(next!.map((m) => m.to)) : new Set());
+            }}
+            previewKind={state.nextPiece}
+            pulseIndices={pulseIndices}
+            onHoverCell={(coord) => {
+              if (!coord) {
+                setPulseIndices(new Set());
+                return;
+              }
+              const comp = previewImmediateMerge(state, coord, state.nextPiece);
+              setPulseIndices(new Set(comp ?? []));
             }}
           />
         </div>
 
-        <aside className="space-y-4">
-          <div className="rounded-xl border bg-white p-4">
+        <aside className="flex flex-col gap-4">
+          <div className="order-2 rounded-xl border bg-white p-4">
             <h2 className="text-lg font-semibold">Settings</h2>
             <div className="mt-3 space-y-3 text-sm">
               <label className="flex items-center justify-between gap-3">
@@ -204,6 +246,20 @@ export function GameClient(): ReactNode {
                 />
               </label>
 
+              <label className="flex items-center justify-between gap-3">
+                <span>Crack rocks on adjacent merges</span>
+                <input
+                  type="checkbox"
+                  checked={settingsDraft.crackRocksOnAdjacentMerge}
+                  onChange={(e) =>
+                    setSettingsDraft((s) => ({
+                      ...s,
+                      crackRocksOnAdjacentMerge: e.target.checked,
+                    }))
+                  }
+                />
+              </label>
+
               <div className="rounded-lg bg-zinc-50 p-3">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold">Initial random tiles</span>
@@ -229,7 +285,7 @@ export function GameClient(): ReactNode {
               </div>
               <div className="rounded-lg bg-zinc-50 p-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold">Bear animation</span>
+                  <span className="font-semibold">Animation speed</span>
                   <span className="tabular-nums">{animMs}ms</span>
                 </div>
                 <input
@@ -250,7 +306,7 @@ export function GameClient(): ReactNode {
             </div>
           </div>
 
-          <div className="rounded-xl border bg-white p-4">
+          <div className="order-1 rounded-xl border bg-white p-4">
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm text-zinc-600">Score</div>
@@ -294,7 +350,7 @@ export function GameClient(): ReactNode {
             ) : null}
           </div>
 
-          <div className="rounded-xl border bg-white p-4">
+          <div className="order-3 rounded-xl border bg-white p-4">
             <h2 className="text-lg font-semibold">Replay</h2>
             <p className="mt-1 text-sm text-zinc-600">
               Replays store the initial seed, settings, and each placement.

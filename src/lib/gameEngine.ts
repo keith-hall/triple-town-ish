@@ -45,6 +45,8 @@ export type GameSettingsV1 = {
   spawnRocks: boolean;
   spawnBears: boolean;
   spawnCrystals: boolean;
+  /** If enabled, merges crack adjacent rocks; after enough cracks, a rock breaks and disappears. */
+  crackRocksOnAdjacentMerge: boolean;
   /** If true, bears can move on the same turn they are placed. */
   newBearsMoveImmediately: boolean;
   /** Randomly seed the board with 0..initialRandomTilesMax tiles on new game. */
@@ -56,15 +58,23 @@ export const DEFAULT_SETTINGS: GameSettingsV1 = {
   spawnRocks: true,
   spawnBears: true,
   spawnCrystals: true,
+  crackRocksOnAdjacentMerge: true,
   newBearsMoveImmediately: false,
   initialRandomTilesMax: 5,
 };
 
 export type BearMove = { from: number; to: number };
 
+export type MergeEvent = {
+  to: number;
+  created: TileKind;
+  consumed: { index: number; kind: TileKind }[]; // includes anchor as one of the consumed indices
+};
+
 export type GameState = {
   grid: Cell[]; // length GRID_CELLS, row-major
   bearCooldown: number[]; // length GRID_CELLS; >0 means bear is "new" and cannot move yet
+  rockCracks: number[]; // length GRID_CELLS; meaningful only where grid[index]=="rock"
   settings: GameSettingsV1;
   score: number;
   turn: number;
@@ -80,8 +90,10 @@ export type GameState = {
 };
 
 export type PlaceResult =
-  | { ok: true; state: GameState; bearMoves: BearMove[] }
+  | { ok: true; state: GameState; bearMoves: BearMove[]; mergeEvents: MergeEvent[] }
   | { ok: false; reason: "occupied" | "out_of_bounds" | "game_over" };
+
+const ROCK_CRACKS_TO_BREAK = 5;
 
 export type ReplayV1 = {
   version: 1;
@@ -303,6 +315,7 @@ export function createNewGame(seed: number, settings?: Partial<GameSettingsV1>):
   };
   const grid: Cell[] = Array.from({ length: GRID_CELLS }, () => null);
   const bearCooldown: number[] = Array.from({ length: GRID_CELLS }, () => 0);
+  const rockCracks: number[] = Array.from({ length: GRID_CELLS }, () => 0);
   const rngSeed = seed >>> 0;
 
   let score = 0;
@@ -345,6 +358,7 @@ export function createNewGame(seed: number, settings?: Partial<GameSettingsV1>):
   let stabilized: GameState = {
     grid,
     bearCooldown,
+    rockCracks,
     settings: resolvedSettings,
     score,
     turn: 0,
@@ -387,6 +401,23 @@ function mergeComponent(
   for (const idx of component) nextGrid[idx] = null;
   nextGrid[anchor] = upgraded;
   return { grid: nextGrid, upgradedAt: anchor };
+}
+
+function crackAdjacentRocks(state: GameState, anchor: number): GameState {
+  if (!state.settings.crackRocksOnAdjacentMerge) return state;
+  const grid = state.grid.slice();
+  const rockCracks = state.rockCracks.slice();
+  for (const nb of listNeighbors(anchor)) {
+    if (grid[nb] !== "rock") continue;
+    const next = (rockCracks[nb] ?? 0) + 1;
+    if (next >= ROCK_CRACKS_TO_BREAK) {
+      grid[nb] = null;
+      rockCracks[nb] = 0;
+    } else {
+      rockCracks[nb] = next;
+    }
+  }
+  return { ...state, grid, rockCracks };
 }
 
 function findMergeComponents(
@@ -447,7 +478,7 @@ function chooseMergeCandidate(
 function applyMergePass(
   state: GameState,
   preferredAnchor: number | null,
-): { state: GameState; merged: boolean } {
+): { state: GameState; merged: boolean; event?: MergeEvent } {
   for (const kind of MERGE_PRIORITY) {
     const candidates = findMergeComponents(state.grid, kind);
     const chosen = chooseMergeCandidate(candidates, preferredAnchor);
@@ -455,6 +486,10 @@ function applyMergePass(
 
     const upgradedKind = NEXT_TIER[kind];
     if (!upgradedKind) continue;
+
+    const consumed = chosen.indices
+      .map((index) => ({ index, kind: state.grid[index] as TileKind }))
+      .filter((t) => t.kind !== null);
 
     const mergedGridResult = mergeComponent(
       state.grid,
@@ -470,17 +505,27 @@ function applyMergePass(
     const biggerMergeMultiplier = 1 + extraTiles * 0.1;
     const awarded = Math.round(base * chainMultiplier * biggerMergeMultiplier);
 
+    let nextState: GameState = {
+      ...state,
+      grid: mergedGridResult.grid,
+      score: state.score + awarded,
+      lastTurn: {
+        chainMerges: chainIndex + 1,
+        pointsEarned: state.lastTurn.pointsEarned + awarded,
+        bearMoves: state.lastTurn.bearMoves,
+      },
+    };
+
+    // Optional mechanic: crack adjacent rocks when the merge result is adjacent.
+    nextState = crackAdjacentRocks(nextState, mergedGridResult.upgradedAt);
+
     return {
       merged: true,
-      state: {
-        ...state,
-        grid: mergedGridResult.grid,
-        score: state.score + awarded,
-        lastTurn: {
-          chainMerges: chainIndex + 1,
-          pointsEarned: state.lastTurn.pointsEarned + awarded,
-          bearMoves: state.lastTurn.bearMoves,
-        },
+      state: nextState,
+      event: {
+        to: mergedGridResult.upgradedAt,
+        created: upgradedKind,
+        consumed,
       },
     };
   }
@@ -489,14 +534,23 @@ function applyMergePass(
 }
 
 function resolveMerges(state: GameState, preferredAnchor: number | null): GameState {
+  return resolveMergesWithEvents(state, preferredAnchor).state;
+}
+
+function resolveMergesWithEvents(
+  state: GameState,
+  preferredAnchor: number | null,
+): { state: GameState; events: MergeEvent[] } {
   let cur = state;
+  const events: MergeEvent[] = [];
   // Re-run from highest priority after each successful merge.
   while (true) {
-    const { state: next, merged } = applyMergePass(cur, preferredAnchor);
+    const { state: next, merged, event } = applyMergePass(cur, preferredAnchor);
     cur = next;
+    if (merged && event) events.push(event);
     if (!merged) break;
   }
-  return cur;
+  return { state: cur, events };
 }
 
 function moveBears(state: GameState): { state: GameState; bearMoves: BearMove[] } {
@@ -504,9 +558,13 @@ function moveBears(state: GameState): { state: GameState; bearMoves: BearMove[] 
   const bearCooldown = state.bearCooldown.slice();
   let rngState = state.rngState;
   const moves: BearMove[] = [];
+  const movedDestinations = new Set<number>();
 
   for (let i = 0; i < grid.length; i++) {
     if (grid[i] !== "bear") continue;
+
+    // Prevent a bear from moving multiple times in a single turn.
+    if (movedDestinations.has(i)) continue;
 
     if ((bearCooldown[i] ?? 0) > 0) continue;
 
@@ -529,6 +587,9 @@ function moveBears(state: GameState): { state: GameState; bearMoves: BearMove[] 
     bearCooldown[dest] = 0;
     bearCooldown[i] = 0;
     moves.push({ from: i, to: dest });
+
+    // If the bear moved to a higher index, the scan would otherwise move it again.
+    movedDestinations.add(dest);
   }
 
   // Decrement cooldowns after this turn's movement phase.
@@ -556,6 +617,7 @@ export function placeNextPiece(state: GameState, coord: Coord): PlaceResult {
     ...state,
     grid: state.grid.slice(),
     bearCooldown: state.bearCooldown.slice(),
+    rockCracks: state.rockCracks.slice(),
     lastTurn: { chainMerges: 0, pointsEarned: 0, bearMoves: 0 },
   };
 
@@ -566,15 +628,26 @@ export function placeNextPiece(state: GameState, coord: Coord): PlaceResult {
   }
   nextState.turn = state.turn + 1;
 
+  const mergeEvents: MergeEvent[] = [];
+
   // Resolution phase: merges, then bears move, then merges again.
-  nextState = resolveMerges(nextState, idx);
+  {
+    const resolved = resolveMergesWithEvents(nextState, idx);
+    nextState = resolved.state;
+    mergeEvents.push(...resolved.events);
+  }
   const moved = moveBears(nextState);
   nextState = moved.state;
-  nextState = resolveMerges(nextState, idx);
+  {
+    const resolved = resolveMergesWithEvents(nextState, idx);
+    nextState = resolved.state;
+    mergeEvents.push(...resolved.events);
+  }
 
   // Crystal rule: if a newly placed crystal wasn't used in a merge, it becomes a rock.
   if (placedPiece === "crystal" && nextState.grid[idx] === "crystal") {
     nextState.grid[idx] = "rock";
+    nextState.rockCracks[idx] = 0;
   }
 
   // Generate next piece.
@@ -585,7 +658,12 @@ export function placeNextPiece(state: GameState, coord: Coord): PlaceResult {
   nextState.gameOver = computeGameOver(nextState.grid);
   nextState.lastTurn.bearMoves = moved.bearMoves.length;
 
-  return { ok: true, state: nextState, bearMoves: moved.bearMoves };
+  return {
+    ok: true,
+    state: nextState,
+    bearMoves: moved.bearMoves,
+    mergeEvents,
+  };
 }
 
 export function renderTileShort(kind: TileKind): string {
@@ -646,6 +724,7 @@ export function isGameSettingsV1(value: unknown): value is GameSettingsV1 {
   if (typeof v.spawnRocks !== "boolean") return false;
   if (typeof v.spawnBears !== "boolean") return false;
   if (typeof v.spawnCrystals !== "boolean") return false;
+  if (typeof v.crackRocksOnAdjacentMerge !== "boolean") return false;
   if (typeof v.newBearsMoveImmediately !== "boolean") return false;
   if (typeof v.initialRandomTilesMax !== "number") return false;
   return true;
@@ -684,4 +763,45 @@ export function isReplayV3(value: unknown): value is ReplayV3 {
     if (!isTileKind(mm.piece)) return false;
   }
   return true;
+}
+
+/**
+ * UI helper: returns the immediate (single-step) merge component that would be formed
+ * by placing `piece` at `coord`, or null if it would not immediately merge.
+ */
+export function previewImmediateMerge(
+  state: GameState,
+  coord: Coord,
+  piece: TileKind,
+): number[] | null {
+  if (!inBounds(coord)) return null;
+  const idx = coordToIndex(coord);
+  if (state.grid[idx] !== null) return null;
+  if (!isMergeableKind(piece)) return null;
+  if (piece === "crystal") return null;
+
+  const grid = state.grid.slice();
+  grid[idx] = piece;
+
+  const visited = new Set<number>();
+  const q: number[] = [idx];
+  visited.add(idx);
+  const comp: number[] = [];
+
+  while (q.length) {
+    const cur = q.pop()!;
+    const cell = grid[cur];
+    if (cell !== piece && cell !== "crystal") continue;
+    comp.push(cur);
+    for (const nb of listNeighbors(cur)) {
+      if (visited.has(nb)) continue;
+      const nbCell = grid[nb];
+      if (nbCell === piece || nbCell === "crystal") {
+        visited.add(nb);
+        q.push(nb);
+      }
+    }
+  }
+
+  return comp.length >= 3 ? comp : null;
 }

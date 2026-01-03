@@ -1,15 +1,17 @@
-import type { BearMove, Cell, Coord } from "@/lib/gameEngine";
+import type { Cell, Coord, TileKind } from "@/lib/gameEngine";
 import { GRID_SIZE, indexToCoord } from "@/lib/gameEngine";
 import { TileView } from "./TileView";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 
-function BearMoveOverlay({
+export type OverlayMove = { from: number; to: number; kind: TileKind };
+
+function TileMoveOverlay({
   moves,
   ms,
   onDone,
 }: {
-  moves: BearMove[];
+  moves: OverlayMove[];
   ms: number;
   onDone: () => void;
 }): ReactNode {
@@ -54,7 +56,7 @@ function BearMoveOverlay({
               transition: `transform ${ms}ms ease-in-out`,
             }}
           >
-            <TileView kind="bear" />
+            <TileView kind={m.kind} />
           </div>
         );
       })}
@@ -67,18 +69,28 @@ export function GameBoard({
   onCellClick,
   disabled,
   dimmedIndices,
-  bearMoves,
-  bearAnimMs,
-  onBearAnimDone,
+  rockCracks,
+  animMoves,
+  animMs,
+  onAnimDone,
+  previewKind,
+  pulseIndices,
+  onHoverCell,
 }: {
   grid: Cell[];
   onCellClick: (coord: Coord) => void;
   disabled: boolean;
   dimmedIndices?: Set<number>;
-  bearMoves?: BearMove[];
-  bearAnimMs?: number;
-  onBearAnimDone?: () => void;
+  rockCracks?: number[];
+  animMoves?: OverlayMove[];
+  animMs?: number;
+  onAnimDone?: () => void;
+  previewKind?: TileKind;
+  pulseIndices?: Set<number>;
+  onHoverCell?: (coord: Coord | null) => void;
 }): ReactNode {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
   return (
     <div className="relative" style={{ ["--gap" as string]: "0.5rem" }}>
       <div
@@ -89,23 +101,41 @@ export function GameBoard({
           const x = idx % GRID_SIZE;
           const y = Math.floor(idx / GRID_SIZE);
           const isEmpty = cell === null;
+          const shouldPulse = pulseIndices?.has(idx) ?? false;
           return (
             <button
               key={idx}
               type="button"
               disabled={disabled || !isEmpty}
               onClick={() => onCellClick({ x, y })}
+              onPointerEnter={(e) => {
+                if (e.pointerType !== "mouse") return;
+                setHoveredIndex(idx);
+                onHoverCell?.({ x, y });
+              }}
+              onPointerLeave={(e) => {
+                if (e.pointerType !== "mouse") return;
+                setHoveredIndex((cur) => (cur === idx ? null : cur));
+                onHoverCell?.(null);
+              }}
               className={
                 "aspect-square rounded-lg border p-1 transition " +
                 (isEmpty
                   ? "bg-white hover:bg-zinc-50 active:bg-zinc-100"
                   : "bg-white") +
+                (shouldPulse ? " ring-2 ring-emerald-400 animate-pulse" : "") +
                 " disabled:cursor-not-allowed disabled:opacity-60"
               }
               aria-label={isEmpty ? `Empty cell (${x}, ${y})` : `Cell (${x}, ${y})`}
             >
               {cell ? (
-                <TileView kind={cell} dimmed={dimmedIndices?.has(idx)} />
+                <TileView
+                  kind={cell}
+                  dimmed={dimmedIndices?.has(idx)}
+                  rockCracks={cell === "rock" ? rockCracks?.[idx] : undefined}
+                />
+              ) : hoveredIndex === idx && previewKind ? (
+                <TileView kind={previewKind} dimmed={true} />
               ) : (
                 <div className="h-full w-full rounded-md bg-zinc-100" />
               )}
@@ -113,8 +143,8 @@ export function GameBoard({
           );
         })}
       </div>
-      {bearMoves && bearMoves.length > 0 && bearAnimMs !== undefined && onBearAnimDone ? (
-        <BearMoveOverlay moves={bearMoves} ms={bearAnimMs} onDone={onBearAnimDone} />
+      {animMoves && animMoves.length > 0 && animMs !== undefined && onAnimDone ? (
+        <TileMoveOverlay moves={animMoves} ms={animMs} onDone={onAnimDone} />
       ) : null}
     </div>
   );

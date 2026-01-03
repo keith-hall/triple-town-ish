@@ -41,6 +41,7 @@ function toReplayV2(replay: Replay): ReplayV2 {
       spawnRocks: true,
       spawnBears: true,
       spawnCrystals: true,
+      crackRocksOnAdjacentMerge: false,
       // Legacy behavior: bears moved on the same turn they were placed.
       newBearsMoveImmediately: true,
       // Legacy behavior: games started with an empty grid.

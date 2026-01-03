@@ -33,7 +33,7 @@ export function tileClassName(kind: TileKind): string {
   }
 }
 
-function TileSvg({ kind }: { kind: TileKind }): ReactNode {
+function TileSvg({ kind, rockCracks }: { kind: TileKind; rockCracks?: number }): ReactNode {
   // Simple, consistent 64×64 icons. Colors are driven by the surrounding text color.
   switch (kind) {
     case "grass":
@@ -102,6 +102,18 @@ function TileSvg({ kind }: { kind: TileKind }): ReactNode {
             opacity="0.9"
           />
           <path d="M22 26h14" stroke="white" strokeWidth="3" opacity="0.35" strokeLinecap="round" />
+          {(rockCracks ?? 0) >= 1 ? (
+            <path d="M26 44l6-10" stroke="white" strokeWidth="3" opacity="0.55" strokeLinecap="round" />
+          ) : null}
+          {(rockCracks ?? 0) >= 2 ? (
+            <path d="M34 50l6-12" stroke="white" strokeWidth="3" opacity="0.55" strokeLinecap="round" />
+          ) : null}
+          {(rockCracks ?? 0) >= 3 ? (
+            <path d="M18 40l10-6" stroke="white" strokeWidth="3" opacity="0.5" strokeLinecap="round" />
+          ) : null}
+          {(rockCracks ?? 0) >= 4 ? (
+            <path d="M38 36l10 8" stroke="white" strokeWidth="3" opacity="0.5" strokeLinecap="round" />
+          ) : null}
         </svg>
       );
     case "bear":
@@ -153,9 +165,11 @@ function TileSvg({ kind }: { kind: TileKind }): ReactNode {
 export function TileView({
   kind,
   dimmed,
+  rockCracks,
 }: {
   kind: TileKind;
   dimmed?: boolean;
+  rockCracks?: number;
 }): ReactNode {
   return (
     <div
@@ -166,7 +180,7 @@ export function TileView({
       }
       title={tileDisplayName(kind)}
     >
-      <div className="h-full w-full">{TileSvg({ kind })}</div>
+      <div className="h-full w-full">{TileSvg({ kind, rockCracks })}</div>
     </div>
   );
 }
