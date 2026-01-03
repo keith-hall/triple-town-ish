@@ -25,6 +25,7 @@ import {
 import {
   copyTextToClipboard,
   downloadJson,
+  consumeResumePayload,
   loadAnimationMs,
   loadSettings,
   saveAnimationMs,
@@ -44,6 +45,7 @@ export function GameClient(): ReactNode {
   const [seed, setSeed] = useState<number>(() => generateSeed());
   const [state, setState] = useState<GameState>(() => createNewGame(seed, settingsDraft));
   const [moves, setMoves] = useState<ReplayMoveV3[]>([]);
+  const [forcedPieces, setForcedPieces] = useState<TileKind[]>([]);
   const [copied, setCopied] = useState(false);
   const [createdAt, setCreatedAt] = useState(() => new Date().toISOString());
   const [animMoves, setAnimMoves] = useState<OverlayMove[]>([]);
@@ -62,6 +64,39 @@ export function GameClient(): ReactNode {
     };
     return replayV3;
   }, [createdAt, moves, seed, state.settings]);
+
+  const currentNextPiece = forcedPieces[0] ?? state.nextPiece;
+
+  useEffect(() => {
+    // Resume from replay viewer if present.
+    const payload = consumeResumePayload();
+    if (!payload) return;
+
+    const rep = payload.replay as unknown;
+    const step = Math.max(0, Math.floor(payload.step));
+
+    if (isReplayV3(rep)) {
+      let s = createNewGame(rep.seed, rep.settings);
+      const applied: ReplayMoveV3[] = [];
+
+      for (let i = 0; i < Math.min(step, rep.moves.length); i++) {
+        const mv = rep.moves[i]!;
+        s = { ...s, nextPiece: mv.piece };
+        const r = placeNextPiece(s, { x: mv.x, y: mv.y });
+        if (!r.ok) break;
+        s = r.state;
+        applied.push(mv);
+      }
+
+      setSeed(rep.seed);
+      setState(s);
+      setMoves(applied);
+      setForcedPieces(rep.moves.slice(Math.min(step, rep.moves.length)).map((m) => m.piece));
+      setSettingsDraft({ ...DEFAULT_SETTINGS, ...rep.settings });
+      setCreatedAt(new Date().toISOString());
+      return;
+    }
+  }, []);
 
   useEffect(() => {
     saveSettings(settingsDraft);
@@ -88,6 +123,7 @@ export function GameClient(): ReactNode {
     setSeed(nextSeed);
     setState(createNewGame(nextSeed, settingsDraft));
     setMoves([]);
+    setForcedPieces([]);
     setCreatedAt(new Date().toISOString());
     setAnimMoves([]);
     setAnimQueue([]);
@@ -101,11 +137,14 @@ export function GameClient(): ReactNode {
       setAnimQueue([]);
       setDimmedDestinations(new Set());
     }
-    const piece = state.nextPiece;
-    const res = placeNextPiece(state, coord);
+    const effectiveState =
+      forcedPieces.length > 0 ? { ...state, nextPiece: forcedPieces[0]! } : state;
+    const piece = effectiveState.nextPiece;
+    const res = placeNextPiece(effectiveState, coord);
     if (!res.ok) return;
     setState(res.state);
     setMoves((m) => [...m, { ...coord, piece }]);
+    if (forcedPieces.length > 0) setForcedPieces((p) => p.slice(1));
 
     if (animMs > 0) {
       const steps: OverlayMove[][] = [];
@@ -188,14 +227,14 @@ export function GameClient(): ReactNode {
               const shouldDim = next!.some((m) => m.kind === "bear");
               setDimmedDestinations(shouldDim ? new Set(next!.map((m) => m.to)) : new Set());
             }}
-            previewKind={state.nextPiece}
+            previewKind={currentNextPiece}
             pulseIndices={pulseIndices}
             onHoverCell={(coord) => {
               if (!coord) {
                 setPulseIndices(new Set());
                 return;
               }
-              const comp = previewImmediateMerge(state, coord, state.nextPiece);
+              const comp = previewImmediateMerge(state, coord, currentNextPiece);
               setPulseIndices(new Set(comp ?? []));
             }}
           />
@@ -322,9 +361,9 @@ export function GameClient(): ReactNode {
               <div className="text-sm text-zinc-600">Next piece</div>
               <div className="mt-2 flex items-center gap-3">
                 <div className="h-12 w-12">
-                  <TileView kind={state.nextPiece} />
+                  <TileView kind={currentNextPiece} />
                 </div>
-                <div className="text-sm font-semibold">{tileDisplayName(state.nextPiece)}</div>
+                <div className="text-sm font-semibold">{tileDisplayName(currentNextPiece)}</div>
               </div>
             </div>
 

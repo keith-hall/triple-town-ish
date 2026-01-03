@@ -15,7 +15,7 @@ import {
   type ReplayV2,
   type ReplayV3,
 } from "@/lib/gameEngine";
-import { consumeReplayToOpen, parseReplayJson } from "@/lib/storage";
+import { consumeReplayToOpen, parseReplayJson, setResumePayload } from "@/lib/storage";
 import { GameBoard } from "./GameBoard";
 import { TileView } from "./TileView";
 
@@ -240,6 +240,16 @@ export function ReplayViewerClient(): ReactNode {
                   onClick={() => setStep(replay.moves.length)}
                 >
                   End
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50"
+                  onClick={() => {
+                    setResumePayload({ version: 1, replay, step });
+                    window.location.href = "/game";
+                  }}
+                >
+                  Resume from here
                 </button>
               </div>
               {step > 0 ? (

@@ -626,6 +626,15 @@ export function placeNextPiece(state: GameState, coord: Coord): PlaceResult {
   if (state.nextPiece === "bear" && !state.settings.newBearsMoveImmediately) {
     nextState.bearCooldown[idx] = 1;
   }
+
+  // If a newly placed bear is immediately trapped, it turns into a gravestone right away.
+  if (placedPiece === "bear") {
+    const hasEmptyNeighbor = listNeighbors(idx).some((nb) => nextState.grid[nb] === null);
+    if (!hasEmptyNeighbor) {
+      nextState.grid[idx] = "gravestone";
+      nextState.bearCooldown[idx] = 0;
+    }
+  }
   nextState.turn = state.turn + 1;
 
   const mergeEvents: MergeEvent[] = [];

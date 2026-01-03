@@ -1,4 +1,4 @@
-import type { GameSettingsV1, ReplayV3 } from "./gameEngine";
+import type { GameSettingsV1, Replay, ReplayV3 } from "./gameEngine";
 
 export type HighScoreEntryV3 = {
   version: 3;
@@ -13,6 +13,13 @@ const HIGH_SCORES_KEY = "tripleTownHighScoresV3";
 const SETTINGS_KEY = "tripleTownSettingsV1";
 const ANIM_MS_KEY = "tripleTownAnimMsV1";
 const REPLAY_TO_OPEN_KEY = "tripleTownReplayToOpenV3";
+const RESUME_KEY = "tripleTownResumeV1";
+
+export type ResumePayloadV1 = {
+  version: 1;
+  replay: Replay;
+  step: number;
+};
 
 export function loadHighScores(): HighScoreEntryV3[] {
   if (typeof window === "undefined") return [];
@@ -98,6 +105,23 @@ export function consumeReplayToOpen(): ReplayV3 | null {
     if (!raw) return null;
     window.localStorage.removeItem(REPLAY_TO_OPEN_KEY);
     return JSON.parse(raw) as ReplayV3;
+  } catch {
+    return null;
+  }
+}
+
+export function setResumePayload(payload: ResumePayloadV1): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(RESUME_KEY, JSON.stringify(payload));
+}
+
+export function consumeResumePayload(): ResumePayloadV1 | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(RESUME_KEY);
+    if (!raw) return null;
+    window.localStorage.removeItem(RESUME_KEY);
+    return JSON.parse(raw) as ResumePayloadV1;
   } catch {
     return null;
   }
