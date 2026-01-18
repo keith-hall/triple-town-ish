@@ -1,5 +1,9 @@
 # Triple Town-ish (Next.js + Bun)
 
+This repository contains a browser-based, single-player, turn-based, grid-based merge puzzle inspired by **Triple Town**.
+
+It was built purely using Kilo Code's App Builder, with OpenAI ChatGPT 5.2 model. See `CONTEXT.md` for more information and the `docs` folder for the prompts used.
+
 ## Local setup (repo already cloned)
 
 ### Install dependencies

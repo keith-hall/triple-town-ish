@@ -1,0 +1,1 @@
+When placing a bear, if it is trapped it should immediately become a gravestone even when the option is not set for a bear to move when it is placed. Let's add the ability in the replay viewer to resume a game from the current shown turn, essentially giving us free undo capabilities and "what if I had placed that part differently" exploration
