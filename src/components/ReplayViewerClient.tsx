@@ -1,6 +1,3 @@
-"use client";
-
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -106,12 +103,12 @@ export function ReplayViewerClient(): ReactNode {
           <p className="text-sm text-zinc-600">Paste a replay JSON and step through moves.</p>
         </div>
         <div className="flex gap-2">
-          <Link className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50" href="/">
+          <a className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50" href="#/">
             Main menu
-          </Link>
-          <Link className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50" href="/game">
+          </a>
+          <a className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50" href="#/game">
             New game
-          </Link>
+          </a>
         </div>
       </header>
 
@@ -246,7 +243,7 @@ export function ReplayViewerClient(): ReactNode {
                   className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50"
                   onClick={() => {
                     setResumePayload({ version: 1, replay, step });
-                    window.location.href = "/game";
+                    window.location.hash = "#/game";
                   }}
                 >
                   Resume from here

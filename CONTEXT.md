@@ -1,11 +1,11 @@
-# Triple-Town-like Merge Puzzle (Next.js)
+# Triple-Town-like Merge Puzzle (Vite + React SPA)
 
 This repository contains a browser-based, single-player, turn-based, grid-based merge puzzle inspired by **Triple Town**.
 
 ## Goals
 
 - Provide a deterministic merge-puzzle game on a fixed **6×6** grid.
-- Preserve the “place 1 piece → resolve merges (chain reactions) → repeat” loop.
+- Preserve the "place 1 piece → resolve merges (chain reactions) → repeat" loop.
 - Support **replays** via JSON export/import (seeded RNG + recorded player moves).
 - Persist **high scores** locally so players can compete on the same device/browser.
 
@@ -33,16 +33,27 @@ This repository contains a browser-based, single-player, turn-based, grid-based 
 - Core rules live in [`src/lib/gameEngine.ts`](src/lib/gameEngine.ts:1).
   - All randomness comes from the engine PRNG state so replays are deterministic.
   - The UI treats the engine as a pure-ish state transition system.
-- UI is implemented as client components where interactivity is required.
-  - Main menu is server-rendered but uses a client component for high scores.
+- UI is a fully client-side React SPA built with Vite and deployed as static files.
+- Routing is hash-based (`#/`, `#/game`, `#/replay`) handled in [`src/main.tsx`](src/main.tsx:1).
 
 ## Conventions
 
-- Server Components by default; add `"use client"` only for interactive screens.
+- All components are standard React components (no framework-specific directives).
+- Tailwind CSS v4 is integrated via the `@tailwindcss/vite` plugin.
 - Replays are versioned (`version: 1`) to allow schema evolution.
+
+## Build
+
+```sh
+npm run dev      # start dev server
+npm run build    # production build → dist/
+npm run preview  # preview production build
+npm run lint     # ESLint
+```
 
 ## Major changes log
 
 - 2026-01-02: Initial implementation of game engine, game UI, replay export/import, and high scores.
 - 2026-01-02: Added configurable spawns, replay settings (v2), initial random seeding, SVG tile icons, and bear movement animation.
 - 2026-01-02: Replay v3 includes the placed tile per move; crystals turn into rocks if not merged; initial seeding avoids starting merges.
+- 2026-05-03: Migrated from Next.js App Router to Vite + React SPA with hash-based routing.
