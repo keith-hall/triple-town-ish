@@ -1,5 +1,3 @@
-"use client";
-
 import { clearHighScores, loadHighScores, setReplayToOpen } from "@/lib/storage";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
@@ -45,7 +43,7 @@ export function HighScoresPanel(): ReactNode {
               className="flex w-full items-baseline justify-between gap-3 rounded-md bg-zinc-50 px-3 py-2 text-left hover:bg-zinc-100"
               onClick={() => {
                 setReplayToOpen(s.replay);
-                window.location.href = "/replay";
+                window.location.hash = "#/replay";
               }}
             >
               <div className="text-sm">

@@ -1,7 +1,7 @@
-import Link from "next/link";
-import { HighScoresPanel } from "@/components/HighScoresPanel";
+import { HighScoresPanel } from "./HighScoresPanel";
+import type { ReactNode } from "react";
 
-export default function Home() {
+export function HomePage(): ReactNode {
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-8 p-6">
       <header className="pt-8">
@@ -16,18 +16,18 @@ export default function Home() {
         <div className="rounded-xl border bg-white p-6">
           <h2 className="text-xl font-semibold">Main Menu</h2>
           <div className="mt-4 flex flex-wrap gap-3">
-            <Link
-              href="/game"
+            <a
+              href="#/game"
               className="rounded-md border px-4 py-3 text-sm font-semibold hover:bg-zinc-50"
             >
               Start new game
-            </Link>
-            <Link
-              href="/replay"
+            </a>
+            <a
+              href="#/replay"
               className="rounded-md border px-4 py-3 text-sm font-semibold hover:bg-zinc-50"
             >
               Open replay viewer
-            </Link>
+            </a>
           </div>
           <div className="mt-6 text-sm text-zinc-700">
             <p className="font-semibold">Rules quick summary</p>

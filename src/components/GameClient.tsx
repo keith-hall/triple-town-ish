@@ -1,6 +1,3 @@
-"use client";
-
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -192,9 +189,9 @@ export function GameClient(): ReactNode {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50" href="/">
+          <a className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50" href="#/">
             Main menu
-          </Link>
+          </a>
           <button
             type="button"
             className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50"
@@ -422,12 +419,12 @@ export function GameClient(): ReactNode {
               >
                 Copy JSON
               </button>
-              <Link
+          <a
                 className="rounded-md border px-3 py-2 text-sm hover:bg-zinc-50"
-                href="/replay"
+                href="#/replay"
               >
                 Open viewer
-              </Link>
+              </a>
             </div>
             {copied ? (
               <p className="mt-2 text-sm text-green-700">Copied.</p>

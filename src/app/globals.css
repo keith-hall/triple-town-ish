@@ -1,1 +1,15 @@
 @import "tailwindcss";
+
+body {
+  font-family: "Geist", sans-serif;
+  font-optical-sizing: auto;
+}
+
+code,
+kbd,
+pre,
+samp,
+textarea,
+.font-mono {
+  font-family: "Geist Mono", monospace;
+}
